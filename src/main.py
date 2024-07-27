@@ -75,7 +75,7 @@ def latest_versions(session):
 
 def download(session):
     downloads_url = urljoin(MAIN_DOC_URL, 'download.html')
-    response = get_response(session, MAIN_DOC_URL)
+    response = get_response(session, downloads_url)
     if response is None:
         return
     soup = BeautifulSoup(response.text, features='lxml')
