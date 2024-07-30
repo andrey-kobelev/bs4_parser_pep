@@ -2,47 +2,41 @@ import argparse
 import logging
 from logging.handlers import RotatingFileHandler
 
-from constants import BASE_DIR
-
-
-LOG_FORMAT = '"%(asctime)s - [%(levelname)s] - %(message)s"'
-DT_FORMAT = '%d.%m.%Y %H:%M:%S'
+import constants
 
 
 def configure_argument_parser(available_modes):
     parser = argparse.ArgumentParser(
-        description='Парсер документации Python'
+        description=constants.ARGPARSE_DESCRIPTION
     )
     parser.add_argument(
         'mode',
         choices=available_modes,
-        help='Режимы работы парсера'
+        help=constants.MODE_ARGUMENT_HELP
     )
     parser.add_argument(
         '-c',
         '--clear-cache',
         action='store_true',
-        help='Очистка кеша'
+        help=constants.CLEAR_CACHE_ARGUMENT_HELP
     )
     parser.add_argument(
         '-o',
         '--output',
-        choices=('pretty', 'file'),
-        help='Дополнительные способы вывода данных'
+        choices=(constants.PRETTY_OUTPUT, constants.FILE_OUTPUT),
+        help=constants.OUTPUT_ARGUMENT_HELP
     )
     return parser
 
 
 def configure_logging():
-    log_dir = BASE_DIR / 'logs'
-    log_dir.mkdir(exist_ok=True)
-    log_file = log_dir / 'parser.log'
+    constants.LOG_DIR.mkdir(exist_ok=True)
     rotating_handler = RotatingFileHandler(
-        log_file, maxBytes=10 ** 6, backupCount=5
+        constants.LOG_FILE, maxBytes=10 ** 6, backupCount=5
     )
     logging.basicConfig(
-        datefmt=DT_FORMAT,
-        format=LOG_FORMAT,
+        datefmt=constants.DT_FORMAT,
+        format=constants.LOG_FORMAT,
         level=logging.INFO,
         handlers=(rotating_handler, logging.StreamHandler())
     )
