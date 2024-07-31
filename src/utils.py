@@ -3,7 +3,7 @@ from requests import RequestException
 from bs4 import BeautifulSoup
 
 from exceptions import ParserFindTagException
-import constants
+from constants import ENCODING
 
 
 REQUEST_EXCEPTION = (
@@ -12,10 +12,12 @@ REQUEST_EXCEPTION = (
 FIND_TAG_EXCEPTION = 'Не найден тег {tag} {attrs}'
 
 
-def get_response(session, url, encode=constants.ENCODING):
+def get_response(session, url, encode=ENCODING):
     try:
         response = session.get(url)
         response.encoding = encode
+        if response is None:
+            raise RequestException()
         return response
     except RequestException:
         raise RequestException(

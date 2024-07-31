@@ -4,6 +4,7 @@ import re
 from urllib.parse import urljoin
 
 import requests_cache
+from requests import RequestException
 from tqdm import tqdm
 
 from constants import (
@@ -14,7 +15,6 @@ from constants import (
     LINK_VERSION_STATUS_HEAD,
     VERSION_STATUS_PATTERN,
     DOWNLOADS_URL,
-    PDF_FILE_PATTERN,
     MAIN_PEP_URL,
     EXPECTED_STATUS,
     STATUS_NUMBERS_HEAD,
@@ -38,6 +38,13 @@ START_PARSER_LOG = 'Парсер запущен!'
 COMMANDLINE_ARGS_LOG = 'Аргументы командной строки: {args}'
 FINISH_PARSER_LOG = 'Парсер завершил работу.'
 BAD_LINKS_LOG = 'Сбой при попытке пройти по ссылкам(ке): {links}'
+GENERAL_ERROR_LOG = (
+    'Произошла ошибка во время работы парсера. '
+    'Подробности: {error}'
+)
+EMPTY_TYPE_STATUS_COLUMN_LOG = (
+    'PEP без типа и статуса: {peps}'
+)
 
 FIND_TAG_EXCEPTION = 'Ничего не нашлось'
 
@@ -48,18 +55,10 @@ MISMATCHED_STATUSES = (
 
 
 def whats_new(session):
-    response = get_response(session, WHATS_NEW_URL)
-    if response is None:
-        return
-    soup = get_soup(response)
-    main_div = find_tag(
-        soup, 'section', {'id': 'what-s-new-in-python'}
-    )
-    div_with_ul = find_tag(
-        main_div, 'div', {'class': 'toctree-wrapper'}
-    )
-    sections_by_python = div_with_ul.find_all(
-        'li', attrs={'class': 'toctree-l1'}
+    soup = get_soup(get_response(session, WHATS_NEW_URL))
+    sections_by_python = soup.select(
+        '#what-s-new-in-python '
+        'div.toctree-wrapper li.toctree-l1'
     )
     results = [LINK_TITLE_AUTHOR_HEAD]
     bad_links = []
@@ -67,8 +66,9 @@ def whats_new(session):
         version_a_tag = find_tag(section, 'a')
         href = version_a_tag['href']
         version_link = urljoin(WHATS_NEW_URL, href)
-        response = get_response(session, version_link)
-        if response is None:
+        try:
+            response = get_response(session, version_link)
+        except RequestException:
             bad_links.append(version_link)
             continue
         soup = get_soup(response)
@@ -116,14 +116,13 @@ def download(session):
     if response is None:
         return
     soup = get_soup(response)
-    table = find_tag(soup, 'table', {'class': 'docutils'})
-    a_tags = find_tag(
-        table,
-        'a',
-        {'href': re.compile(PDF_FILE_PATTERN)}
+    link_to_pdf = urljoin(
+        DOWNLOADS_URL,
+        soup.select_one(
+            'table.docutils '
+            'a[href$="pdf-a4.zip"]'
+        )['href']
     )
-    link_to_pdf = urljoin(DOWNLOADS_URL, a_tags['href'])
-
     filename = link_to_pdf.split('/')[-1]
     # DOWNLOADS_DIR.mkdir(exist_ok=True)
     downloads_dir = BASE_DIR / 'downloads'
@@ -159,17 +158,9 @@ def pep(session):
     )
     status_num = defaultdict(int)
     mismatched_statuses = []
+    empty_type_and_status_columns = []
     for table in tqdm(pep_tables):
         for row in find_tag(soup=table, tag='tbody').find_all('tr'):
-            try:
-                type_status = find_tag(soup=row, tag='abbr')
-            except ParserFindTagException:
-                type_status = None
-            status_from_pep_list = ''
-            if type_status:
-                type_status = type_status.text
-                if len(type_status) == 2:
-                    status_from_pep_list = type_status[1]
             link = urljoin(
                 MAIN_PEP_URL,
                 find_tag(
@@ -178,6 +169,13 @@ def pep(session):
                     attrs={'href': re.compile(r'pep-\d{4}/$')}
                 )['href']
             )
+            status_from_pep_list = ''
+            try:
+                type_status = find_tag(soup=row, tag='abbr').text
+                if len(type_status) == 2:
+                    status_from_pep_list = type_status[1]
+            except ParserFindTagException:
+                empty_type_and_status_columns.append(link)
             pep_page_soup = get_soup(
                 get_response(session, link)
             )
@@ -207,6 +205,12 @@ def pep(session):
                 data=mismatched_statuses
             )
         )
+    if empty_type_and_status_columns:
+        logging.info(
+            EMPTY_TYPE_STATUS_COLUMN_LOG.format(
+                peps=empty_type_and_status_columns
+            )
+        )
     return [
         STATUS_NUMBERS_HEAD,
         *status_num.items(),
@@ -223,30 +227,37 @@ MODE_TO_FUNCTION = {
 
 
 def main():
-    configure_logging()
-    logging.info(START_PARSER_LOG)
-    arg_parser = configure_argument_parser(MODE_TO_FUNCTION.keys())
-    args = arg_parser.parse_args()
+    try:
+        configure_logging()
+        logging.info(START_PARSER_LOG)
+        arg_parser = configure_argument_parser(MODE_TO_FUNCTION.keys())
+        args = arg_parser.parse_args()
 
-    logging.info(
-        COMMANDLINE_ARGS_LOG.format(
-            args=args
+        logging.info(
+            COMMANDLINE_ARGS_LOG.format(
+                args=args
+            )
         )
-    )
 
-    session = requests_cache.CachedSession()
-    if args.clear_cache:
-        session.cache.clear()
+        session = requests_cache.CachedSession()
+        if args.clear_cache:
+            session.cache.clear()
 
-    parser_mode = args.mode
-    results = MODE_TO_FUNCTION[parser_mode](session)
+        parser_mode = args.mode
+        results = MODE_TO_FUNCTION[parser_mode](session)
 
-    if results is not None:
-        control_output(results, args)
+        if results is not None:
+            control_output(results, args)
 
-    logging.info(
-        FINISH_PARSER_LOG
-    )
+        logging.info(
+            FINISH_PARSER_LOG
+        )
+    except Exception as error:
+        logging.exception(
+            GENERAL_ERROR_LOG.format(
+                error=error
+            ),
+        )
 
 
 if __name__ == '__main__':
