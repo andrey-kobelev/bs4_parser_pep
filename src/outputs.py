@@ -8,10 +8,10 @@ from prettytable import PrettyTable
 from constants import (
     CSV_FILE_NAME,
     DATETIME_FORMAT,
-    ENCODING,
     PRETTY_OUTPUT,
     FILE_OUTPUT,
-    BASE_DIR
+    BASE_DIR,
+    RESULTS_FILES_DIR_NAME
 )
 
 SAVE_FILE_LOG = (
@@ -33,9 +33,9 @@ def pretty_output(results, **kwargs):
     print(table)
 
 
-def file_output(results, **kwargs):
+def file_output(results, encode='utf-8', **kwargs):
     # RESULTS_DIR.mkdir(exist_ok=True)
-    results_dir = BASE_DIR / 'results'
+    results_dir = BASE_DIR / RESULTS_FILES_DIR_NAME
     results_dir.mkdir(exist_ok=True)
     file_path = results_dir / CSV_FILE_NAME.format(
         parser_mode=kwargs['cli_args'].mode,
@@ -44,21 +44,21 @@ def file_output(results, **kwargs):
         )
     )
     with open(
-        file_path, 'w', encoding=ENCODING
+        file_path, 'w', encoding=encode
     ) as results_file:
-        writer = csv.writer(
+        csv.writer(
             results_file, dialect=csv.unix_dialect
-        )
-        writer.writerows(results)
+        ).writerows(results)
 
     logging.info(SAVE_FILE_LOG.format(file_path=file_path))
 
 
-def control_output(results, cli_args):
-    output = cli_args.output
-    outputs = {
+OUTPUTS = {
         PRETTY_OUTPUT: pretty_output,
         FILE_OUTPUT: file_output,
         None: default_output
     }
-    outputs[output](results, cli_args=cli_args)
+
+
+def control_output(results, cli_args):
+    OUTPUTS[cli_args.output](results, cli_args=cli_args)

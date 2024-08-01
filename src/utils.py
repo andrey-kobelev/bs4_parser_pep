@@ -3,26 +3,25 @@ from requests import RequestException
 from bs4 import BeautifulSoup
 
 from exceptions import ParserFindTagException
-from constants import ENCODING
 
 
 REQUEST_EXCEPTION = (
-    'Возникла ошибка при загрузке страницы {url}'
+    'Возникла ошибка при '
+    'загрузке страницы {url}: {error}'
 )
 FIND_TAG_EXCEPTION = 'Не найден тег {tag} {attrs}'
 
 
-def get_response(session, url, encode=ENCODING):
+def get_response(session, url, encode='utf-8'):
     try:
         response = session.get(url)
         response.encoding = encode
-        if response is None:
-            raise RequestException()
         return response
-    except RequestException:
-        raise RequestException(
+    except RequestException as error:
+        raise ConnectionError(
             REQUEST_EXCEPTION.format(
-                url=url
+                url=url,
+                error=error
             )
         )
 
@@ -43,5 +42,7 @@ def find_tag(soup, tag, attrs=None):
     return searched_tag
 
 
-def get_soup(response):
-    return BeautifulSoup(response.text, features='lxml')
+def get_soup(session, url, features='lxml'):
+    return BeautifulSoup(
+        get_response(session, url).text, features=features
+    )

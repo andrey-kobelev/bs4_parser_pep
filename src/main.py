@@ -4,7 +4,6 @@ import re
 from urllib.parse import urljoin
 
 import requests_cache
-from requests import RequestException
 from tqdm import tqdm
 
 from constants import (
@@ -19,10 +18,7 @@ from constants import (
     EXPECTED_STATUS,
     STATUS_NUMBERS_HEAD,
     TOTAL_NUMBERS_HEAD,
-    WHATS_NEW_MODE,
-    LATEST_VERSIONS_MODE,
-    DOWNLOAD_MODE,
-    PEP_MODE
+    DOWNLOADS_DOCKS_DIR_NAME
 )
 from configs import configure_argument_parser, configure_logging
 from outputs import control_output
@@ -37,7 +33,6 @@ MISMATCHED_STATUSES_LOG = 'НЕСОВПАДЕНИЕ СТАТУСОВ! {data}'
 START_PARSER_LOG = 'Парсер запущен!'
 COMMANDLINE_ARGS_LOG = 'Аргументы командной строки: {args}'
 FINISH_PARSER_LOG = 'Парсер завершил работу.'
-BAD_LINKS_LOG = 'Сбой при попытке пройти по ссылкам(ке): {links}'
 GENERAL_ERROR_LOG = (
     'Произошла ошибка во время работы парсера. '
     'Подробности: {error}'
@@ -45,6 +40,7 @@ GENERAL_ERROR_LOG = (
 EMPTY_TYPE_STATUS_COLUMN_LOG = (
     'PEP без типа и статуса: {peps}'
 )
+BAD_LINKS_LOG = '{}'
 
 FIND_TAG_EXCEPTION = 'Ничего не нашлось'
 
@@ -52,41 +48,45 @@ MISMATCHED_STATUSES = (
     'Статус из списка: {status_from_pep_list}; '
     'Статус на странице {link}: {status_from_pep_page}'
 )
+BAD_LINK = 'Сбой при попытке пройти по ссылке: {link}'
 
 
 def whats_new(session):
-    soup = get_soup(get_response(session, WHATS_NEW_URL))
-    sections_by_python = soup.select(
-        '#what-s-new-in-python '
-        'div.toctree-wrapper li.toctree-l1'
-    )
     results = [LINK_TITLE_AUTHOR_HEAD]
     bad_links = []
-    for section in tqdm(sections_by_python):
-        version_a_tag = find_tag(section, 'a')
-        href = version_a_tag['href']
+    for a_tag in tqdm(
+        get_soup(session, WHATS_NEW_URL).select(
+            '#what-s-new-in-python '
+            'div.toctree-wrapper li.toctree-l1 > a'
+        )
+    ):
+        href = a_tag['href']
+        if not re.match(r'\d\.\d{,2}\.html', href):
+            continue
         version_link = urljoin(WHATS_NEW_URL, href)
         try:
-            response = get_response(session, version_link)
-        except RequestException:
-            bad_links.append(version_link)
+            soup = get_soup(session, version_link)
+        except ConnectionError:
+            bad_links.append(
+                BAD_LINK.format(
+                    link=version_link
+                )
+            )
             continue
-        soup = get_soup(response)
-        h1 = find_tag(soup, 'h1').text
-        dl = find_tag(soup, 'dl').text.replace('\n', ' ')
         results.append(
-            (version_link, h1, dl)
+            (
+                version_link,
+                find_tag(soup, 'h1').text,
+                find_tag(soup, 'dl').text.replace('\n', ' ')
+            )
         )
     if bad_links:
-        logging.info(BAD_LINKS_LOG.format(links=bad_links))
+        logging.info(BAD_LINKS_LOG.format(*bad_links))
     return results
 
 
 def latest_versions(session):
-    response = get_response(session, MAIN_DOC_URL)
-    if response is None:
-        return
-    soup = get_soup(response)
+    soup = get_soup(session, MAIN_DOC_URL)
     sidebar = find_tag(soup, 'div', {'class': 'sphinxsidebar'})
     ul_tags = sidebar.find_all(name='ul')
     for ul in ul_tags:
@@ -112,27 +112,21 @@ def latest_versions(session):
 
 
 def download(session):
-    response = get_response(session, DOWNLOADS_URL)
-    if response is None:
-        return
-    soup = get_soup(response)
     link_to_pdf = urljoin(
         DOWNLOADS_URL,
-        soup.select_one(
+        get_soup(session, DOWNLOADS_URL).select_one(
             'table.docutils '
             'a[href$="pdf-a4.zip"]'
         )['href']
     )
     filename = link_to_pdf.split('/')[-1]
     # DOWNLOADS_DIR.mkdir(exist_ok=True)
-    downloads_dir = BASE_DIR / 'downloads'
+    downloads_dir = BASE_DIR / DOWNLOADS_DOCKS_DIR_NAME
     downloads_dir.mkdir(exist_ok=True)
     archive_path = downloads_dir / filename
 
-    response = get_response(session, link_to_pdf)
-
     with open(archive_path, 'wb') as file:
-        file.write(response.content)
+        file.write(get_response(session, link_to_pdf).content)
 
     logging.info(
         DOWNLOADS_SUCCESS_LOG.format(
@@ -142,8 +136,7 @@ def download(session):
 
 
 def pep(session):
-    response = get_response(session, MAIN_PEP_URL)
-    soup = get_soup(response)
+    soup = get_soup(session, MAIN_PEP_URL)
     pep_tables = (
         find_tag(
             soup=soup,
@@ -156,7 +149,7 @@ def pep(session):
             'class': 'pep-zero-table docutils align-default'
         }
     )
-    status_num = defaultdict(int)
+    statuses_nums = defaultdict(int)
     mismatched_statuses = []
     empty_type_and_status_columns = []
     for table in tqdm(pep_tables):
@@ -177,7 +170,7 @@ def pep(session):
             except ParserFindTagException:
                 empty_type_and_status_columns.append(link)
             pep_page_soup = get_soup(
-                get_response(session, link)
+                session, link
             )
             status_from_pep_page = find_tag(
                 soup=pep_page_soup,
@@ -190,7 +183,7 @@ def pep(session):
                 status_from_pep_page
                 in EXPECTED_STATUS[status_from_pep_list]
             ):
-                status_num[status_from_pep_page] += 1
+                statuses_nums[status_from_pep_page] += 1
             else:
                 mismatched_statuses.append(
                     MISMATCHED_STATUSES.format(
@@ -213,16 +206,16 @@ def pep(session):
         )
     return [
         STATUS_NUMBERS_HEAD,
-        *status_num.items(),
-        (TOTAL_NUMBERS_HEAD, sum(status_num.values()))
+        *statuses_nums.items(),
+        (TOTAL_NUMBERS_HEAD, sum(statuses_nums.values()))
     ]
 
 
 MODE_TO_FUNCTION = {
-    WHATS_NEW_MODE: whats_new,
-    LATEST_VERSIONS_MODE: latest_versions,
-    DOWNLOAD_MODE: download,
-    PEP_MODE: pep
+    'whats-new': whats_new,
+    'latest-versions': latest_versions,
+    'download': download,
+    'pep': pep
 }
 
 
