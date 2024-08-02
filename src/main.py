@@ -38,9 +38,9 @@ GENERAL_ERROR_LOG = (
     'Подробности: {error}'
 )
 EMPTY_TYPE_STATUS_COLUMN_LOG = (
-    'PEP без типа и статуса: {peps}'
+    'PEP без типа и статуса: {data}'
 )
-BAD_LINKS_LOG = '{}'
+BAD_LINKS_LOG = '{data}'
 
 FIND_TAG_EXCEPTION = 'Ничего не нашлось'
 
@@ -81,30 +81,23 @@ def whats_new(session):
             )
         )
     if bad_links:
-        logging.info(BAD_LINKS_LOG.format(*bad_links))
+        logging.info(BAD_LINKS_LOG.format(data=bad_links))
     return results
 
 
 def latest_versions(session):
-    soup = get_soup(session, MAIN_DOC_URL)
-    sidebar = find_tag(soup, 'div', {'class': 'sphinxsidebar'})
-    ul_tags = sidebar.find_all(name='ul')
-    for ul in ul_tags:
-        if 'All versions' in ul.text:
-            a_tags = ul.find_all('a')
-            break
-    else:
-        raise ParserFindTagException(
-            FIND_TAG_EXCEPTION
-        )
     results = [LINK_VERSION_STATUS_HEAD]
-    for a in a_tags:
-        link = a['href']
-        get_info = re.search(VERSION_STATUS_PATTERN, a.text)
+    for a_tag in get_soup(
+            session, MAIN_DOC_URL
+    ).select('div.sphinxsidebar li > a'):
+        link = a_tag['href']
+        if not re.match(r'.*\d\.\d{,2}/$', link):
+            break
+        get_info = re.search(VERSION_STATUS_PATTERN, a_tag.text)
         if get_info:
             version, status = get_info.groups()
         else:
-            version, status = a.text, ''
+            version, status = a_tag.text, ''
         results.append(
             (link, version, status)
         )
@@ -136,74 +129,70 @@ def download(session):
 
 
 def pep(session):
-    soup = get_soup(session, MAIN_PEP_URL)
-    pep_tables = (
-        find_tag(
-            soup=soup,
-            tag='section',
-            attrs={'id': 'pep-content'}
-        )
-    ).find_all(
-        name='table',
-        attrs={
-            'class': 'pep-zero-table docutils align-default'
-        }
-    )
     statuses_nums = defaultdict(int)
     mismatched_statuses = []
     empty_type_and_status_columns = []
-    for table in tqdm(pep_tables):
-        for row in find_tag(soup=table, tag='tbody').find_all('tr'):
-            link = urljoin(
-                MAIN_PEP_URL,
-                find_tag(
-                    soup=row,
-                    tag='a',
-                    attrs={'href': re.compile(r'pep-\d{4}/$')}
-                )['href']
-            )
-            status_from_pep_list = ''
-            try:
-                type_status = find_tag(soup=row, tag='abbr').text
-                if len(type_status) == 2:
-                    status_from_pep_list = type_status[1]
-            except ParserFindTagException:
-                empty_type_and_status_columns.append(link)
+    bad_links = []
+    for row in tqdm(
+        get_soup(session, MAIN_PEP_URL).select(
+            '#pep-content '
+            'table[class="pep-zero-table docutils align-default"] > '
+            'tbody > tr'
+        )
+    ):
+        link = urljoin(
+            MAIN_PEP_URL,
+            find_tag(
+                soup=row,
+                tag='a',
+                attrs={'href': re.compile(r'pep-\d{4}/$')}
+            )['href']
+        )
+        status_from_pep_list = ''
+        try:
+            type_status = find_tag(soup=row, tag='abbr').text
+            if len(type_status) == 2:
+                status_from_pep_list = type_status[1]
+        except ParserFindTagException:
+            empty_type_and_status_columns.append(link)
+        try:
             pep_page_soup = get_soup(
                 session, link
             )
-            status_from_pep_page = find_tag(
-                soup=pep_page_soup,
-                tag='dl',
-                attrs={'class': 'rfc2822 field-list simple'}
-            ).find(
-                string='Status'
-            ).find_next('abbr').text
-            if (
-                status_from_pep_page
-                in EXPECTED_STATUS[status_from_pep_list]
-            ):
-                statuses_nums[status_from_pep_page] += 1
-            else:
-                mismatched_statuses.append(
-                    MISMATCHED_STATUSES.format(
-                        status_from_pep_list=status_from_pep_list,
-                        status_from_pep_page=status_from_pep_page,
-                        link=link
-                    )
+        except ConnectionError:
+            bad_links.append(
+                BAD_LINK.format(
+                    link=link
                 )
-    if mismatched_statuses:
-        logging.info(
-            MISMATCHED_STATUSES_LOG.format(
-                data=mismatched_statuses
             )
-        )
-    if empty_type_and_status_columns:
-        logging.info(
-            EMPTY_TYPE_STATUS_COLUMN_LOG.format(
-                peps=empty_type_and_status_columns
+            continue
+        status_from_pep_page = find_tag(
+            soup=pep_page_soup,
+            tag='dl',
+            attrs={'class': 'rfc2822 field-list simple'}
+        ).find(
+            string='Status'
+        ).find_next('abbr').text
+        if (
+            status_from_pep_page
+            in EXPECTED_STATUS[status_from_pep_list]
+        ):
+            statuses_nums[status_from_pep_page] += 1
+        else:
+            mismatched_statuses.append(
+                MISMATCHED_STATUSES.format(
+                    status_from_pep_list=status_from_pep_list,
+                    status_from_pep_page=status_from_pep_page,
+                    link=link
+                )
             )
-        )
+    for message, log_elements in {
+        MISMATCHED_STATUSES_LOG: mismatched_statuses,
+        EMPTY_TYPE_STATUS_COLUMN_LOG: empty_type_and_status_columns,
+        BAD_LINKS_LOG: bad_links
+    }.items():
+        if log_elements:
+            logging.info(message.format(data=log_elements))
     return [
         STATUS_NUMBERS_HEAD,
         *statuses_nums.items(),
