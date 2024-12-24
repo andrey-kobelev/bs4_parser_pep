@@ -5,7 +5,7 @@
     - [email](mailto:andrey.pydev@gmail.com)
   
 ## Технологии  
-- [Python](https://www.python.org/)
+- [Python 3.9](https://www.python.org/downloads/release/python-390/)
 - [BeautifulSoup4](https://pypi.org/project/beautifulsoup4/4.9.3/)
 - [requests-cache](https://pypi.org/project/requests-cache/1.0.0/)
 - [tqdm](https://tqdm.github.io/)
